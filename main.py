@@ -71,16 +71,29 @@ class App:
         time_frame = ttk.Frame(config_frame)
         time_frame.grid(row=1, column=1, columnspan=2, sticky="ew", padx=5, pady=5)
         
-        times = [t.strip() for t in self.config.get('Settings', 'schedule_times', fallback='12:00,17:00,19:00').split(',')]
-        self.time1_entry = ttk.Entry(time_frame, width=10)
+        # Modified fallback from 3 times to 5 times
+        times = [t.strip() for t in self.config.get('Settings', 'schedule_times', fallback='08:00,12:00,15:00,17:00,19:00').split(',')]
+        
+        # Time Entry 1
+        self.time1_entry = ttk.Entry(time_frame, width=8)
         self.time1_entry.insert(0, times[0] if len(times) > 0 else "")
-        self.time1_entry.pack(side=tk.LEFT, padx=(0, 5))
-        self.time2_entry = ttk.Entry(time_frame, width=10)
+        self.time1_entry.pack(side=tk.LEFT, padx=(0, 3))
+        # Time Entry 2
+        self.time2_entry = ttk.Entry(time_frame, width=8)
         self.time2_entry.insert(0, times[1] if len(times) > 1 else "")
-        self.time2_entry.pack(side=tk.LEFT, padx=5)
-        self.time3_entry = ttk.Entry(time_frame, width=10)
+        self.time2_entry.pack(side=tk.LEFT, padx=3)
+        # Time Entry 3
+        self.time3_entry = ttk.Entry(time_frame, width=8)
         self.time3_entry.insert(0, times[2] if len(times) > 2 else "")
-        self.time3_entry.pack(side=tk.LEFT, padx=5)
+        self.time3_entry.pack(side=tk.LEFT, padx=3)
+        # Time Entry 4 (Added)
+        self.time4_entry = ttk.Entry(time_frame, width=8)
+        self.time4_entry.insert(0, times[3] if len(times) > 3 else "")
+        self.time4_entry.pack(side=tk.LEFT, padx=3)
+        # Time Entry 5 (Added)
+        self.time5_entry = ttk.Entry(time_frame, width=8)
+        self.time5_entry.insert(0, times[4] if len(times) > 4 else "")
+        self.time5_entry.pack(side=tk.LEFT, padx=3)
         
         ttk.Label(config_frame, text="Log File Path:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
         self.log_path_entry = ttk.Entry(config_frame)
@@ -149,7 +162,8 @@ class App:
         self.log_folder = self.log_path_entry.get()
         
         schedule_times_str = []
-        time_entries = [self.time1_entry.get(), self.time2_entry.get(), self.time3_entry.get()]
+        # Added time4_entry and time5_entry
+        time_entries = [self.time1_entry.get(), self.time2_entry.get(), self.time3_entry.get(), self.time4_entry.get(), self.time5_entry.get()]
 
         for t in time_entries:
             if t.strip():
@@ -164,7 +178,8 @@ class App:
             self.log("Error: Please enter at least one valid schedule time.")
             return
 
-        for widget in [self.start_button, self.host_entry, self.time1_entry, self.time2_entry, self.time3_entry, self.log_path_entry, self.browse_button]:
+        # Added self.time4_entry, self.time5_entry to disabled widget list
+        for widget in [self.start_button, self.host_entry, self.time1_entry, self.time2_entry, self.time3_entry, self.time4_entry, self.time5_entry, self.log_path_entry, self.browse_button]:
             widget.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
 
@@ -184,7 +199,8 @@ class App:
         self.stop_scheduler.set()
         schedule.clear()
         
-        for widget in [self.start_button, self.host_entry, self.time1_entry, self.time2_entry, self.time3_entry, self.log_path_entry, self.browse_button]:
+        # Added self.time4_entry, self.time5_entry to normal widget list
+        for widget in [self.start_button, self.host_entry, self.time1_entry, self.time2_entry, self.time3_entry, self.time4_entry, self.time5_entry, self.log_path_entry, self.browse_button]:
             widget.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         
@@ -340,7 +356,7 @@ class App:
 
 # --- Main Application Execution ---
 if __name__ == '__main__':
-    instance_name = "Global\\API_Monitor_UI_Mutex_v10" # Incremented version
+    instance_name = "Global\\API_Monitor_UI_Mutex_v11" # Incremented version
     instance = SingleInstance(instance_name)
     if instance.is_running():
         root = tk.Tk()
@@ -359,4 +375,3 @@ if __name__ == '__main__':
     root.after(2000, app.start_monitoring)
     
     root.mainloop()
-
