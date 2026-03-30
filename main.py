@@ -18,7 +18,6 @@ import re
 
 # --- Single Instance Lock using a Mutex ---
 class SingleInstance:
-    """Ensures only one instance of the application can run."""
     def __init__(self, name):
         self.mutex_name = name
         self.mutex = win32event.CreateMutex(None, 1, self.mutex_name)
@@ -36,7 +35,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("API Connection Monitor & MTR Dashboard")
-        self.root.geometry("700x550")
+        self.root.geometry("750x600") # ขยายหน้าจอให้กราฟกว้างขึ้น
         self.root.resizable(False, False)
         
         self.style = ttk.Style(self.root)
@@ -49,15 +48,14 @@ class App:
         # MTR Variables
         self.mtr_running = False
         self.mtr_data = {}
-        self.mtr_threads = []
-        self.ping_history = []
-        self.max_history = 60
+        self.time_history = []  # เก็บเวลาแกน X
+        self.hop_history = {}   # เก็บค่า ms ของทุก Hop {1: [10, 20...], 2: [...]}
+        self.max_history = 60   # จำนวนจุดบนแกน X (ประมาณ 60 วินาที)
         
         # --- Get Documents folder path ---
         self.documents_path = os.path.join(os.path.expanduser('~'), 'Documents')
         self.default_log_path = os.path.join(self.documents_path, 'API Latency Logs')
         
-        # --- Load Configuration ---
         self.load_config()
 
         # --- Setup Notebook (Tabs) ---
@@ -108,7 +106,6 @@ class App:
         self.browse_button = ttk.Button(config_frame, text="Browse...", command=self.select_log_folder)
         self.browse_button.grid(row=2, column=2, padx=5, pady=5)
 
-        # Control Section
         control_frame = ttk.Frame(self.tab1, padding="10")
         control_frame.pack(fill=tk.X, pady=5)
 
@@ -118,7 +115,6 @@ class App:
         self.stop_button = ttk.Button(control_frame, text="Stop Scheduled Monitor", command=self.stop_monitoring, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
         
-        # Log Section
         log_frame = ttk.LabelFrame(self.tab1, text="Status Log", padding="10")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
@@ -128,7 +124,6 @@ class App:
         self.log("API Connection Monitor Initialized.")
 
     def setup_tab2(self):
-        # MTR Controls
         ctrl_frame = ttk.Frame(self.tab2, padding="5")
         ctrl_frame.pack(fill=tk.X)
         
@@ -145,22 +140,21 @@ class App:
         self.mtr_status_lbl = ttk.Label(ctrl_frame, text="Ready", foreground="gray")
         self.mtr_status_lbl.pack(side=tk.RIGHT, padx=10)
 
-        # Graph Section (Canvas)
-        graph_frame = ttk.LabelFrame(self.tab2, text="Destination Latency Graph (Live)", padding="5")
+        # Graph Section (เพิ่มขนาดความสูงและมีขอบล่างสำหรับเวลา)
+        graph_frame = ttk.LabelFrame(self.tab2, text="Multi-Hop Latency Graph & Timeline", padding="5")
         graph_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        self.graph_canvas = tk.Canvas(graph_frame, height=120, bg="#1e1e1e", highlightthickness=0)
-        self.graph_canvas.pack(fill=tk.X, padx=5, pady=5)
-        self.draw_graph_grid()
+        self.graph_canvas = tk.Canvas(graph_frame, height=160, bg="#1e1e1e", highlightthickness=0)
+        self.graph_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.draw_graph_bg()
 
-        # Table Section (Treeview)
+        # Table Section
         table_frame = ttk.Frame(self.tab2, padding="5")
         table_frame.pack(fill=tk.BOTH, expand=True)
         
         columns = ("Hop", "IP Address", "Loss%", "Sent", "Recv", "Best", "Avrg", "Worst", "Last")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=10)
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=8)
         
-        # Setup Column widths
         self.tree.column("Hop", width=40, anchor="center")
         self.tree.column("IP Address", width=180, anchor="w")
         self.tree.column("Loss%", width=60, anchor="center")
@@ -171,8 +165,7 @@ class App:
         self.tree.column("Worst", width=60, anchor="center")
         self.tree.column("Last", width=60, anchor="center")
         
-        for col in columns:
-            self.tree.heading(col, text=col)
+        for col in columns: self.tree.heading(col, text=col)
             
         scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scrollbar.set)
@@ -180,55 +173,86 @@ class App:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     # ================= MTR & GRAPH LOGIC =================
-    def draw_graph_grid(self):
+    def draw_graph_bg(self):
         self.graph_canvas.delete("all")
-        w = 660  # Approx width
-        h = 120
-        # Draw horizontal grid lines
-        for y in range(0, h, 30):
-            self.graph_canvas.create_line(0, y, w, y, fill="#333333", dash=(2, 2))
-        self.graph_canvas.create_text(10, 10, text="ms", fill="#888888", anchor="w")
+        w = 700; h = 160
+        self.graph_canvas.create_text(10, 10, text="Waiting for data...", fill="#888888", anchor="w")
 
     def update_graph(self):
-        self.draw_graph_grid()
-        if not self.ping_history:
-            return
+        self.graph_canvas.delete("all")
+        
+        # ดึงขนาด Canvas จริง
+        w = int(self.graph_canvas.winfo_width())
+        if w < 10: w = 700
+        h = int(self.graph_canvas.winfo_height())
+        if h < 10: h = 160
+        
+        bottom_margin = 25  # พื้นที่สำหรับพิมพ์เวลาแกน X
+        right_margin = 40   # พื้นที่สำหรับพิมพ์ชื่อ Hop (H1, H2) แกน Y
+        graph_w = w - right_margin
+        graph_h = h - bottom_margin
+        
+        if not self.time_history: return
             
-        w = 660
-        h = 120
-        max_val = max(100, max(self.ping_history) * 1.2) # Minimum scale is 100ms
+        # หาค่า Max ms ของทุกเส้นรวมกันเพื่อปรับสเกลกราฟอัตโนมัติ
+        max_val = 100
+        for hop, hist in self.hop_history.items():
+            if hist:
+                valid_ms = [x for x in hist if x < 999] # ไม่เอา Timeout มาคำนวณ
+                if valid_ms and max(valid_ms) > max_val: 
+                    max_val = max(valid_ms)
+        max_val = max_val * 1.2 # เผื่อขอบบนไว้ 20%
         
-        x_step = w / (self.max_history - 1)
-        points = []
-        
-        for i, val in enumerate(self.ping_history):
+        # 1. วาดเส้นแบ่งแกน Yแนวนอน (ค่า Latency)
+        for i in range(5):
+            y = graph_h - (i * (graph_h / 4))
+            val = int((i / 4) * max_val)
+            self.graph_canvas.create_line(0, y, graph_w, y, fill="#333333", dash=(2, 2))
+            self.graph_canvas.create_text(5, y - 8, text=f"{val}ms", fill="#888888", anchor="w", font=("Arial", 8))
+            
+        # 2. วาดเส้นแบ่งแกน X แนวตั้ง (เวลา HH:MM:SS)
+        x_step = graph_w / (self.max_history - 1) if self.max_history > 1 else graph_w
+        for i, tm in enumerate(self.time_history):
             x = i * x_step
-            # Invert Y axis (0 is at bottom)
-            y = h - ((val / max_val) * h)
-            # Clip y to stay inside canvas
-            y = max(0, min(h, y))
-            points.append((x, y))
+            # พิมพ์เวลาทุกๆ 10 จุด หรือจุดสุดท้าย
+            if i % 10 == 0 or i == len(self.time_history) - 1:
+                self.graph_canvas.create_line(x, 0, x, graph_h, fill="#444444", dash=(1, 4))
+                self.graph_canvas.create_text(x, graph_h + 10, text=tm, fill="#aaaaaa", font=("Arial", 8))
+        
+        # 3. วาดเส้นกราฟของทุก Hop
+        for hop_num, hist in self.hop_history.items():
+            if len(hist) < 2: continue
             
-        if len(points) > 1:
-            # Draw line
+            points = []
+            for i, val in enumerate(hist):
+                x = i * x_step
+                plot_val = max_val if val >= 999 else val # ถ้า Timeout (999) ให้ชนเพดาน
+                y = graph_h - ((plot_val / max_val) * graph_h)
+                points.append((x, y))
+                
+            # ลากเส้นต่อกัน
             for i in range(len(points) - 1):
                 x1, y1 = points[i]
                 x2, y2 = points[i+1]
-                # Color code: Green if < 100, Yellow if < 200, Red if high
-                color = "#00ff00"
-                if self.ping_history[i+1] > 200: color = "#ff4444"
-                elif self.ping_history[i+1] > 100: color = "#ffcc00"
                 
-                self.graph_canvas.create_line(x1, y1, x2, y2, fill=color, width=2)
+                val2 = hist[i+1]
+                # การแยกสี (ตามค่าความหน่วง)
+                if val2 >= 999: color = "#ff00ff"    # สีม่วง/ชมพู = Timeout / ขาดการติดต่อ
+                elif val2 > 200: color = "#ff4444"   # สีแดง = ช้ามาก
+                elif val2 > 100: color = "#ffcc00"   # สีเหลือง = เริ่มหน่วง
+                else: color = "#00ff00"              # สีเขียว = ปกติ ลื่นไหล
+                
+                # ถ้าเป็นปลายทาง ให้เส้นหนาขึ้นเพื่อให้เด่นกว่าทางผ่าน
+                line_w = 2 if hop_num == max(self.hop_history.keys()) else 1
+                self.graph_canvas.create_line(x1, y1, x2, y2, fill=color, width=line_w)
             
-            # Show latest value text
-            last_val = self.ping_history[-1]
-            self.graph_canvas.create_text(w - 30, points[-1][1] - 10, text=f"{last_val}ms", fill="#ffffff")
+            # 4. พิมพ์ชื่อ Hop แปะไว้ที่ปลายเส้นด้านขวา (เช่น H1, H2, H3)
+            last_y = points[-1][1]
+            self.graph_canvas.create_text(graph_w + 5, last_y, text=f"H{hop_num}", fill="#ffffff", anchor="w", font=("Arial", 8, "bold"))
 
     def start_mtr(self):
         self.mtr_target_host = self.mtr_target.get().strip()
-        if not self.mtr_target_host:
-            return
+        if not self.mtr_target_host: return
             
         self.mtr_start_btn.config(state=tk.DISABLED)
         self.mtr_stop_btn.config(state=tk.NORMAL)
@@ -236,9 +260,10 @@ class App:
         
         self.mtr_running = True
         self.mtr_data = {}
-        self.ping_history = []
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        self.time_history = []
+        self.hop_history = {}
+        
+        for item in self.tree.get_children(): self.tree.delete(item)
             
         self.mtr_status_lbl.config(text="Tracing route (approx 10-15s)...", foreground="#d97706")
         threading.Thread(target=self.run_mtr_trace, daemon=True).start()
@@ -251,53 +276,58 @@ class App:
         self.mtr_status_lbl.config(text="Stopped", foreground="gray")
 
     def run_mtr_trace(self):
-        # Run Tracert (-d to skip DNS resolution for speed)
-        process = subprocess.Popen(['tracert', '-d', '-h', '30', self.mtr_target_host], 
-                                   stdout=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        
+        process = subprocess.Popen(['tracert', '-d', '-h', '30', self.mtr_target_host], stdout=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
         hop_regex = re.compile(r'^\s*(\d+)\s+.*\s+(\d+\.\d+\.\d+\.\d+)')
         
         while True:
             line = process.stdout.readline()
             if not line: break
-            
             match = hop_regex.search(line)
             if match:
                 hop_num = int(match.group(1))
                 ip = match.group(2)
                 self.mtr_data[hop_num] = {'ip': ip, 'sent': 0, 'recv': 0, 'best': 9999, 'worst': 0, 'sum': 0, 'last': 0}
-                
-                # Insert into Treeview safely
                 self.root.after(0, lambda h=hop_num, i=ip: self.tree.insert("", "end", iid=str(h), values=(h, i, "0", "0", "0", "0", "0", "0", "0")))
 
         process.wait()
+        if not self.mtr_running: return 
         
-        if not self.mtr_running: return # Was stopped during trace
-        
-        self.root.after(0, lambda: self.mtr_status_lbl.config(text="Pinging continuous...", foreground="#16a34a"))
+        self.root.after(0, lambda: self.mtr_status_lbl.config(text="Monitoring Live...", foreground="#16a34a"))
         threading.Thread(target=self.mtr_ping_loop, daemon=True).start()
 
     def mtr_ping_loop(self):
         while self.mtr_running:
+            cycle_results = {}
             threads = []
             for hop_num, data in self.mtr_data.items():
-                t = threading.Thread(target=self.ping_single_hop, args=(hop_num, data['ip']))
+                t = threading.Thread(target=self.ping_single_hop_cycle, args=(hop_num, data['ip'], cycle_results))
                 t.start()
                 threads.append(t)
                 
-            for t in threads:
-                t.join() # Wait for all ping requests in this cycle to finish
+            for t in threads: t.join() # รอให้ยิง Ping ครบทุก Hop ใน 1 รอบ
                 
             if not self.mtr_running: break
             
+            # บันทึกเวลาของรอบนี้
+            current_time = datetime.now().strftime("%H:%M:%S")
+            self.time_history.append(current_time)
+            if len(self.time_history) > self.max_history:
+                self.time_history.pop(0)
+                
+            # บันทึกค่า Latency ของแต่ละ Hop ให้ตรงกับเวลา
+            for hop_num in self.mtr_data.keys():
+                if hop_num not in self.hop_history:
+                    self.hop_history[hop_num] = []
+                ms = cycle_results.get(hop_num, 999)
+                self.hop_history[hop_num].append(ms)
+                if len(self.hop_history[hop_num]) > self.max_history:
+                    self.hop_history[hop_num].pop(0)
+                    
             self.root.after(0, self.update_mtr_ui)
-            time.sleep(1) # Interval
+            time.sleep(1)
 
-    def ping_single_hop(self, hop_num, ip):
-        # Ping with 1 count, 1000ms timeout
-        process = subprocess.run(['ping', '-n', '1', '-w', '1000', ip], 
-                                 capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        
+    def ping_single_hop_cycle(self, hop_num, ip, results_dict):
+        process = subprocess.run(['ping', '-n', '1', '-w', '1000', ip], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
         output = process.stdout
         self.mtr_data[hop_num]['sent'] += 1
         
@@ -309,20 +339,10 @@ class App:
             self.mtr_data[hop_num]['sum'] += ms
             if ms < self.mtr_data[hop_num]['best']: self.mtr_data[hop_num]['best'] = ms
             if ms > self.mtr_data[hop_num]['worst']: self.mtr_data[hop_num]['worst'] = ms
-            
-            # If this is the final destination, add to graph history
-            if hop_num == max(self.mtr_data.keys()):
-                self.ping_history.append(ms)
-                if len(self.ping_history) > self.max_history:
-                    self.ping_history.pop(0)
+            results_dict[hop_num] = ms
         else:
-            # Timeout
             self.mtr_data[hop_num]['last'] = "ERR"
-            if hop_num == max(self.mtr_data.keys()):
-                # Represent timeout as spike in graph
-                self.ping_history.append(999)
-                if len(self.ping_history) > self.max_history:
-                    self.ping_history.pop(0)
+            results_dict[hop_num] = 999
 
     def update_mtr_ui(self):
         for hop_num, data in self.mtr_data.items():
@@ -334,7 +354,6 @@ class App:
             worst = data['worst']
             last = data['last']
             
-            # Update Treeview row
             if self.tree.exists(str(hop_num)):
                 self.tree.item(str(hop_num), values=(hop_num, data['ip'], f"{loss}%", sent, recv, best, avg, worst, last))
                 
@@ -343,10 +362,8 @@ class App:
     # ================= ORIGINAL SCHEDULED LOGIC =================
     def load_config(self):
         self.config = configparser.ConfigParser()
-        if getattr(sys, 'frozen', False):
-            application_path = os.path.dirname(sys.executable)
-        else:
-            application_path = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False): application_path = os.path.dirname(sys.executable)
+        else: application_path = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(application_path, 'config.ini')
         if not os.path.exists(config_path): pass
         else: self.config.read(config_path)
@@ -378,19 +395,13 @@ class App:
                 except ValueError:
                     self.log(f"Error: Invalid time format '{t}'. Please use HH:MM (24-hour format).")
                     return
-        if not schedule_times_str:
-            self.log("Error: Please enter at least one valid schedule time.")
-            return
-
+        if not schedule_times_str: return
         for widget in [self.start_button, self.host_entry, self.time1_entry, self.time2_entry, self.time3_entry, self.time4_entry, self.time5_entry, self.log_path_entry, self.browse_button]:
             widget.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
-
         self.log(f"Monitoring started for {self.host}. Scheduled times: {', '.join(schedule_times_str)}")
         schedule.clear()
-        for scheduled_time in schedule_times_str:
-            schedule.every().day.at(scheduled_time).do(self.run_diagnostics_thread)
-        
+        for scheduled_time in schedule_times_str: schedule.every().day.at(scheduled_time).do(self.run_diagnostics_thread)
         self.stop_scheduler.clear()
         self.scheduler_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         self.scheduler_thread.start()
@@ -409,8 +420,7 @@ class App:
             schedule.run_pending()
             time.sleep(1)
 
-    def run_diagnostics_thread(self):
-        threading.Thread(target=self.run_diagnostics, daemon=True).start()
+    def run_diagnostics_thread(self): threading.Thread(target=self.run_diagnostics, daemon=True).start()
 
     def run_diagnostics(self):
         self.log(f"Running scheduled diagnostics for {self.host}...")
@@ -495,9 +505,8 @@ class App:
         self.stop_mtr()
         self.root.quit()
 
-# --- Main Application Execution ---
 if __name__ == '__main__':
-    instance_name = "Global\\API_Monitor_UI_Mutex_v12" 
+    instance_name = "Global\\API_Monitor_UI_Mutex_v13" 
     instance = SingleInstance(instance_name)
     if instance.is_running():
         root = tk.Tk()
